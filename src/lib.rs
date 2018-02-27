@@ -13,14 +13,14 @@
 //!
 //! ```
 
-#[cfg(test)]
+#[macro_use]
 extern crate failure;
 extern crate libc;
 #[cfg(test)]
 extern crate tempdir;
 
 use std::path::{Path, PathBuf};
-use std::{env, fs};
+use std::{env, fs, io};
 
 // Remove the `AsciiExt` will make `which-rs` build failed in older versions of Rust.
 // Please Keep it here though we don't need it in the new Rust version(>=1.23).
@@ -32,6 +32,17 @@ use std::ffi::CString;
 use std::ffi::OsStr;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
+
+#[derive(Fail, Debug)]
+pub enum Error {
+    #[fail(display = "{}", _0)]
+    Msg(&'static str),
+
+    #[fail(display = "{}: {}", msg, err)]
+    IO { msg: &'static str, err: io::Error },
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// Like `Path::with_extension`, but don't replace an existing extension.
 fn ensure_exe_extension<T: AsRef<Path>>(path: T) -> PathBuf {
@@ -78,14 +89,17 @@ fn ensure_exe_extension<T: AsRef<Path>>(path: T) -> PathBuf {
 /// assert_eq!(result, PathBuf::from("/usr/bin/rustc"));
 ///
 /// ```
-pub fn which<T: AsRef<OsStr>>(binary_name: T) -> Result<PathBuf, Error> {
-    env::current_dir()
-        .or_else(|_| Err(Error::new("Couldn't get current directory")))
-        .and_then(|cwd| which_in(binary_name, env::var_os("PATH"), &cwd))
+pub fn which<T: AsRef<OsStr>>(binary_name: T) -> Result<PathBuf> {
+    let cwd = env::current_dir().map_err(|err| Error::IO {
+        msg: "Couldn't get current directory",
+        err,
+    })?;
+
+    which_in(binary_name, env::var_os("PATH"), &cwd)
 }
 
 /// Find `binary_name` in the path list `paths`, using `cwd` to resolve relative paths.
-pub fn which_in<T, U, V>(binary_name: T, paths: Option<U>, cwd: V) -> Result<PathBuf, Error>
+pub fn which_in<T, U, V>(binary_name: T, paths: Option<U>, cwd: V) -> Result<PathBuf>
 where
     T: AsRef<OsStr>,
     U: AsRef<OsStr>,
@@ -98,34 +112,6 @@ where
     let finder = Finder::new();
 
     finder.find(binary_name, paths, cwd, &binary_checker)
-}
-
-/// Wrap error message string
-#[derive(Debug)]
-pub struct Error {
-    msg: &'static str,
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.msg)
-    }
-}
-
-impl std::error::Error for Error {
-    fn description(&self) -> &str {
-        self.msg
-    }
-}
-
-impl Error {
-    fn new(msg: &'static str) -> Error {
-        Error { msg: msg }
-    }
-
-    pub fn msg(&self) -> &'static str {
-        self.msg
-    }
 }
 
 struct Finder;
@@ -141,7 +127,7 @@ impl Finder {
         paths: Option<U>,
         cwd: V,
         binary_checker: &Checker,
-    ) -> Result<PathBuf, Error>
+    ) -> Result<PathBuf>
     where
         T: AsRef<OsStr>,
         U: AsRef<OsStr>,
@@ -157,7 +143,7 @@ impl Finder {
                     Ok(path)
                 } else {
                     // Absolute path but it's not usable.
-                    Err(Error::new("Bad absolute path"))
+                    Err(Error::Msg("Bad absolute path"))
                 }
             } else {
                 // Try to make it absolute.
@@ -168,7 +154,7 @@ impl Finder {
                     Ok(new_path)
                 } else {
                     // File doesn't exist or isn't executable.
-                    Err(Error::new("Bad relative path"))
+                    Err(Error::Msg("Bad relative path"))
                 }
             }
         } else {
@@ -180,7 +166,7 @@ impl Finder {
                         .skip_while(|p| !(binary_checker.is_valid(p)))
                         .next()
                 })
-                .ok_or_else(|| Error::new("Cannot find binary path"))
+                .ok_or_else(|| Error::Msg("Cannot find binary path"))
         }
     }
 }
@@ -349,7 +335,7 @@ mod test {
         }
     }
 
-    fn _which<T: AsRef<OsStr>>(f: &TestFixture, path: T) -> Result<PathBuf, Error> {
+    fn _which<T: AsRef<OsStr>>(f: &TestFixture, path: T) -> Result<PathBuf> {
         which_in(path, Some(f.paths.clone()), f.tempdir.path())
     }
 
