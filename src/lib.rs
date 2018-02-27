@@ -40,19 +40,21 @@ pub struct Error {
     inner: Context<ErrorKind>,
 }
 
+// To suppress false positives from cargo-clippy
+#[cfg_attr(feature = "cargo-clippy", allow(empty_line_after_outer_attr))]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Fail)]
 pub enum ErrorKind {
-    #[fail(display = "Unable to get current directory")]
-    NoCurrentDir,
-
     #[fail(display = "Bad absolute path")]
     BadAbsolutePath,
 
     #[fail(display = "Bad relative path")]
     BadRelativePath,
 
-    #[fail(display = "Unable to find binary path")]
-    InvalidBinaryPath
+    #[fail(display = "Cannot find binary path")]
+    CannotFindBinaryPath,
+
+    #[fail(display = "Cannot get current directory")]
+    CannotGetCurrentDir,
 }
 
 impl Fail for Error {
@@ -79,7 +81,9 @@ impl Error {
 
 impl From<ErrorKind> for Error {
     fn from(kind: ErrorKind) -> Error {
-        Error { inner: Context::new(kind) }
+        Error {
+            inner: Context::new(kind),
+        }
     }
 }
 
@@ -137,7 +141,7 @@ fn ensure_exe_extension<T: AsRef<Path>>(path: T) -> PathBuf {
 ///
 /// ```
 pub fn which<T: AsRef<OsStr>>(binary_name: T) -> Result<PathBuf> {
-    let cwd = env::current_dir().context(ErrorKind::NoCurrentDir)?;
+    let cwd = env::current_dir().context(ErrorKind::CannotGetCurrentDir)?;
     which_in(binary_name, env::var_os("PATH"), &cwd)
 }
 
@@ -209,7 +213,7 @@ impl Finder {
                         .skip_while(|p| !(binary_checker.is_valid(p)))
                         .next()
                 })
-                .ok_or_else(|| ErrorKind::InvalidBinaryPath.into())
+                .ok_or_else(|| ErrorKind::CannotFindBinaryPath.into())
         }
     }
 }
