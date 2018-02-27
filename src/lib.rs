@@ -19,8 +19,10 @@ extern crate libc;
 #[cfg(test)]
 extern crate tempdir;
 
+use failure::{Backtrace, Context, Fail, ResultExt};
+use std::fmt::{self, Display};
 use std::path::{Path, PathBuf};
-use std::{env, fs, io};
+use std::{env, fs};
 
 // Remove the `AsciiExt` will make `which-rs` build failed in older versions of Rust.
 // Please Keep it here though we don't need it in the new Rust version(>=1.23).
@@ -33,13 +35,58 @@ use std::ffi::OsStr;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 
-#[derive(Fail, Debug)]
-pub enum Error {
-    #[fail(display = "{}", _0)]
-    Msg(&'static str),
+#[derive(Debug)]
+pub struct Error {
+    inner: Context<ErrorKind>,
+}
 
-    #[fail(display = "{}: {}", msg, err)]
-    IO { msg: &'static str, err: io::Error },
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Fail)]
+pub enum ErrorKind {
+    #[fail(display = "Unable to get current directory")]
+    NoCurrentDir,
+
+    #[fail(display = "Bad absolute path")]
+    BadAbsolutePath,
+
+    #[fail(display = "Bad relative path")]
+    BadRelativePath,
+
+    #[fail(display = "Unable to find binary path")]
+    InvalidBinaryPath
+}
+
+impl Fail for Error {
+    fn cause(&self) -> Option<&Fail> {
+        self.inner.cause()
+    }
+
+    fn backtrace(&self) -> Option<&Backtrace> {
+        self.inner.backtrace()
+    }
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        Display::fmt(&self.inner, f)
+    }
+}
+
+impl Error {
+    pub fn kind(&self) -> ErrorKind {
+        *self.inner.get_context()
+    }
+}
+
+impl From<ErrorKind> for Error {
+    fn from(kind: ErrorKind) -> Error {
+        Error { inner: Context::new(kind) }
+    }
+}
+
+impl From<Context<ErrorKind>> for Error {
+    fn from(inner: Context<ErrorKind>) -> Error {
+        Error { inner }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -90,11 +137,7 @@ fn ensure_exe_extension<T: AsRef<Path>>(path: T) -> PathBuf {
 ///
 /// ```
 pub fn which<T: AsRef<OsStr>>(binary_name: T) -> Result<PathBuf> {
-    let cwd = env::current_dir().map_err(|err| Error::IO {
-        msg: "Couldn't get current directory",
-        err,
-    })?;
-
+    let cwd = env::current_dir().context(ErrorKind::NoCurrentDir)?;
     which_in(binary_name, env::var_os("PATH"), &cwd)
 }
 
@@ -143,7 +186,7 @@ impl Finder {
                     Ok(path)
                 } else {
                     // Absolute path but it's not usable.
-                    Err(Error::Msg("Bad absolute path"))
+                    Err(ErrorKind::BadAbsolutePath.into())
                 }
             } else {
                 // Try to make it absolute.
@@ -154,7 +197,7 @@ impl Finder {
                     Ok(new_path)
                 } else {
                     // File doesn't exist or isn't executable.
-                    Err(Error::Msg("Bad relative path"))
+                    Err(ErrorKind::BadRelativePath.into())
                 }
             }
         } else {
@@ -166,7 +209,7 @@ impl Finder {
                         .skip_while(|p| !(binary_checker.is_valid(p)))
                         .next()
                 })
-                .ok_or_else(|| Error::Msg("Cannot find binary path"))
+                .ok_or_else(|| ErrorKind::InvalidBinaryPath.into())
         }
     }
 }
